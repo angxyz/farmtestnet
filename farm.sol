@@ -30,6 +30,7 @@ contract XFT_FARM is Ownable, ReentrancyGuard {
     bool pause;
     struct UserInfo {
         uint256 amount;
+        uint prevBlock;
     }
 
     mapping (address => UserInfo) public Stakers;
@@ -54,7 +55,7 @@ contract XFT_FARM is Ownable, ReentrancyGuard {
 
     function getPending(address caller) public view returns(uint256){
         uint256 shareOfStake = Stakers[caller].amount.div(LP.balanceOf(address(this)));
-        uint256 blocksPassed = uint256(block.number).sub(uint256(lastBlock));
+        uint256 blocksPassed = uint256(block.number).sub(uint256(Stakers[caller].prevBlock));
         uint256 xftBlocks = xftPerBlock.mul(blocksPassed);
         return xftBlocks.mul(shareOfStake);
 
@@ -70,6 +71,7 @@ contract XFT_FARM is Ownable, ReentrancyGuard {
         LP.transferFrom(msg.sender, address(this), amount);
         Stakers[msg.sender].amount += amount;
         lastBlock = block.number;
+        Stakers[msg.sender].prevBlock = block.number;
 
     }
 
@@ -82,6 +84,7 @@ contract XFT_FARM is Ownable, ReentrancyGuard {
         LP.transferFrom(address(this), msg.sender, amount);
         Stakers[msg.sender].amount -= amount;
         lastBlock = block.number;
+        Stakers[msg.sender].prevBlock = block.number;
 
 
     }
@@ -101,6 +104,7 @@ contract XFT_FARM is Ownable, ReentrancyGuard {
             xft.transferFrom(address(this), msg.sender, pending);
         }
         lastBlock = block.number;
+        Stakers[msg.sender].prevBlock = block.number;
 
     }
 
