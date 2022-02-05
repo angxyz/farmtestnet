@@ -21,16 +21,16 @@ interface IBEP20 {
 
 contract XFT_FARM is Ownable, ReentrancyGuard {
     using SafeMath for uint256;
-    using SafeMath for int;
     IBEP20 xft;
     IBEP20 LP;
     uint256 public xftPerShare;
     uint256 public xftPerBlock;
     uint256 public lastBlock;
     bool pause;
+
     struct UserInfo {
         uint256 amount;
-        uint prevBlock;
+        int256 rewardDebt;
     }
 
     mapping (address => UserInfo) public Stakers;
@@ -47,46 +47,61 @@ contract XFT_FARM is Ownable, ReentrancyGuard {
         require(!pause, "farm is paused");
         _;
     }
-    
+
     modifier deposited() {
-        require(Stakers[msg.sender].amount > 0, "You have 0 deposits");
+        require(Stakers[msg.sender].amount > 0, "0 deposits");
         _;
     }
 
-    function getPending(address caller) public view returns(uint256){
-        uint256 shareOfStake = Stakers[caller].amount.div(LP.balanceOf(address(this)));
-        uint256 blocksPassed = uint256(block.number).sub(uint256(Stakers[caller].prevBlock));
-        uint256 xftBlocks = xftPerBlock.mul(blocksPassed);
-        return xftBlocks.mul(shareOfStake);
+    function update_farm() internal {
+        uint256 lp_supply = LP.balanceOf(address(this));
+        if(block.number > lastBlock ){
+            if(lp_supply != 0){
+                uint256 blocks = block.number.sub(lastBlock);
+                uint256 reward = blocks.mul(xftPerBlock);
+                xftPerShare = xftPerShare.add((reward.mul(1e18) / lp_supply));
+            }
+        }
+    }
 
+    function getPending() public view returns(uint256){
+        UserInfo storage user = Stakers[msg.sender];
+        uint256 lp_supply = LP.balanceOf(address(this));
+        uint256 perShare = xftPerShare;
+        if (block.number > lastBlock && lp_supply > 0){
+            uint256 blocks = block.number.sub(lastBlock);
+            uint256 xftReward = blocks.mul(xftPerBlock);
+            perShare = xftPerShare.add(xftReward.mul(1e18) / lp_supply);
+        }
+        return uint256(int256(user.amount.mul(perShare) / 1e18) - user.rewardDebt);
     }
 
     function deposit(uint256 amount) public paused nonReentrant{
-        require(LP.allowance(msg.sender, address(this)) >= amount, "You must approve the amount of tokens you wish to stake");
-        uint256 pending = getPending(msg.sender);
-        if (pending > 0) {
-            xft.transferFrom(address(this), msg.sender, pending);
-            
-        }
+        require(LP.allowance(msg.sender, address(this)) >= amount, "approve");
+        update_farm();
         LP.transferFrom(msg.sender, address(this), amount);
-        Stakers[msg.sender].amount += amount;
-        lastBlock = block.number;
-        Stakers[msg.sender].prevBlock = block.number;
 
+        UserInfo storage user = Stakers[msg.sender];
+
+        user.amount += amount;
+        user.rewardDebt = int256(user.amount.mul(xftPerShare).div(1e18));
+        lastBlock = block.number;
     }
 
     function withdraw(uint256 amount) public paused deposited nonReentrant{
-        require(amount <= Stakers[msg.sender].amount, "You cannot withdraw more than your current deposit");
-        uint256 pending = getPending(msg.sender);
-        if (pending > 0) {
-            xft.transferFrom(address(this), msg.sender, pending);
-        }
-        LP.transferFrom(address(this), msg.sender, amount);
-        Stakers[msg.sender].amount -= amount;
+        update_farm();
+        UserInfo storage user = Stakers[msg.sender];
+        uint256 pending = getPending();
+
+        require(pending <= xft.balanceOf(address(this)), "farm is drained");
+
+        xft.transfer(msg.sender, pending);
+
+        user.amount = user.amount.sub(amount);
+        user.rewardDebt = int256(user.amount.mul(xftPerShare).div(1e18));
+
+        LP.transfer(msg.sender, amount);
         lastBlock = block.number;
-        Stakers[msg.sender].prevBlock = block.number;
-
-
     }
 
     function emergencyWithdraw() public deposited nonReentrant{
@@ -95,17 +110,18 @@ contract XFT_FARM is Ownable, ReentrancyGuard {
         LP.transfer(msg.sender, user.amount);
 
         user.amount = 0;
+        user.rewardDebt = 0;
     }
 
     function harvest() public paused deposited nonReentrant{
-        uint256 pending = getPending(msg.sender);
-        require(xft.balanceOf(address(this)) > pending, "Not enough XFT in the Farm");
-        if (pending > 0) {
-            xft.transferFrom(address(this), msg.sender, pending);
-        }
-        lastBlock = block.number;
-        Stakers[msg.sender].prevBlock = block.number;
+        UserInfo storage user = Stakers[msg.sender];
+        update_farm();
+        uint256 pending = getPending();
+        require(pending <= xft.balanceOf(address(this)), "farm is drained");
+        user.rewardDebt = int256(user.amount.mul(xftPerShare).div(1e18));
 
+        xft.transfer(msg.sender, pending);
+        lastBlock = block.number;
     }
 
     function stop() public onlyOwner{
