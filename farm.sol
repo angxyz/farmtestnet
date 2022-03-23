@@ -61,6 +61,7 @@ contract XFT_FARM is Ownable, ReentrancyGuard {
                 uint256 reward = blocks.mul(xftPerBlock);
                 xftPerShare = xftPerShare.add((reward.mul(1e18) / lp_supply));
             }
+            lastBlock = block.number;
         }
     }
 
@@ -78,6 +79,11 @@ contract XFT_FARM is Ownable, ReentrancyGuard {
 
     function deposit(uint256 amount) public paused nonReentrant{
         require(LP.allowance(msg.sender, address(this)) >= amount, "approve");
+        //Checks for pending rewards before updating farm
+        uint256 pending = getPending();
+        if(pending > 0){
+            harvest();
+        }
         update_farm();
         LP.transferFrom(msg.sender, address(this), amount);
 
@@ -85,11 +91,9 @@ contract XFT_FARM is Ownable, ReentrancyGuard {
 
         user.amount += amount;
         user.rewardDebt = int256(user.amount.mul(xftPerShare).div(1e18));
-        lastBlock = block.number;
     }
 
     function withdraw(uint256 amount) public paused deposited nonReentrant{
-        update_farm();
         UserInfo storage user = Stakers[msg.sender];
         uint256 pending = getPending();
 
@@ -97,11 +101,11 @@ contract XFT_FARM is Ownable, ReentrancyGuard {
 
         xft.transfer(msg.sender, pending);
 
+        update_farm();
         user.amount = user.amount.sub(amount);
         user.rewardDebt = int256(user.amount.mul(xftPerShare).div(1e18));
 
         LP.transfer(msg.sender, amount);
-        lastBlock = block.number;
     }
 
     function emergencyWithdraw() public deposited nonReentrant{
@@ -121,7 +125,6 @@ contract XFT_FARM is Ownable, ReentrancyGuard {
         user.rewardDebt = int256(user.amount.mul(xftPerShare).div(1e18));
 
         xft.transfer(msg.sender, pending);
-        lastBlock = block.number;
     }
 
     function stop() public onlyOwner{
