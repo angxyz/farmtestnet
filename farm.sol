@@ -5,6 +5,7 @@ import "./@openzeppelin/contracts/access/Ownable.sol";
 import "./@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import "./@openzeppelin/contracts/utils/math/Math.sol";
 import "./@openzeppelin/contracts/utils/math/SafeMath.sol";
+import "./@openzeppelin/contracts/utils/math/SignedSafeMath.sol";
 
 interface IBEP20 {
     function totalSupply() external view returns (uint256);
@@ -21,6 +22,7 @@ interface IBEP20 {
 
 contract XFT_FARM is Ownable, ReentrancyGuard {
     using SafeMath for uint256;
+    using SignedSafeMath for int256;
     IBEP20 xft;
     IBEP20 LP;
     uint256 public xftPerShare;
@@ -54,8 +56,8 @@ contract XFT_FARM is Ownable, ReentrancyGuard {
     }
 
     function update_farm() internal {
-        uint256 lp_supply = LP.balanceOf(address(this));
         if(block.number > lastBlock ){
+            uint256 lp_supply = LP.balanceOf(address(this));
             if(lp_supply != 0){
                 uint256 blocks = block.number.sub(lastBlock);
                 uint256 reward = blocks.mul(xftPerBlock);
@@ -79,20 +81,14 @@ contract XFT_FARM is Ownable, ReentrancyGuard {
 
     function deposit(uint256 amount) public paused nonReentrant{
         require(LP.allowance(msg.sender, address(this)) >= amount, "approve");
-        update_farm();
         
-        //Checks to see if user has pending rewards
-        uint256 pending = getPending();        
-        if (pending > 0){
-            require(pending <= xft.balanceOf(address(this)), "farm is drained");
-            xft.transfer(msg.sender, pending);
-        }
-        LP.transferFrom(msg.sender, address(this), amount);
-
+        update_farm();
         UserInfo storage user = Stakers[msg.sender];
 
-        user.amount += amount;
-        user.rewardDebt = int256(user.amount.mul(xftPerShare).div(1e18));
+        user.amount = user.amount.add(amount);
+        user.rewardDebt = user.rewardDebt.add(int256(user.amount.mul(xftPerShare).div(1e18)));
+
+        LP.transferFrom(msg.sender, address(this), amount);
     }
 
     function withdraw(uint256 amount) public paused deposited nonReentrant{
@@ -102,11 +98,10 @@ contract XFT_FARM is Ownable, ReentrancyGuard {
 
         require(pending <= xft.balanceOf(address(this)), "farm is drained");
 
-        xft.transfer(msg.sender, pending);
-
+        user.rewardDebt = user.rewardDebt.sub(int256(user.amount.mul(xftPerShare).div(1e18)));
         user.amount = user.amount.sub(amount);
-        user.rewardDebt = int256(user.amount.mul(xftPerShare).div(1e18));
 
+        xft.transfer(msg.sender, pending);
         LP.transfer(msg.sender, amount);
     }
 
@@ -120,13 +115,17 @@ contract XFT_FARM is Ownable, ReentrancyGuard {
     }
 
     function harvest() public paused deposited nonReentrant{
-        UserInfo storage user = Stakers[msg.sender];
         update_farm();
+        UserInfo storage user = Stakers[msg.sender];
+        
         uint256 pending = getPending();
         require(pending <= xft.balanceOf(address(this)), "farm is drained");
+        
         user.rewardDebt = int256(user.amount.mul(xftPerShare).div(1e18));
 
-        xft.transfer(msg.sender, pending);
+        if (pending != 0) {
+            xft.transfer(msg.sender, pending);
+        }
     }
 
     function stop() public onlyOwner{
